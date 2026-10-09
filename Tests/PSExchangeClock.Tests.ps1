@@ -416,6 +416,14 @@ Describe 'OMXC25 index' {
             $etfs.Symbol | Should -Be @('SPY', 'QQQ', 'DIA', 'EWU', 'EWG', 'EWJ', 'FXI', 'INDA')
             $etfs[0].Name | Should -Be 'S&P 500 (SPY)'
         }
+
+        It 'labels the regional ETF proxies by the MSCI indices they track' {
+            # Twelve Data catalogue: EWU/EWG/EWJ are the iShares MSCI United Kingdom/Germany/Japan ETFs
+            $etfs = @($script:defs | Where-Object { $_.Kind -eq 'EtfProxy' })
+            ($etfs | Where-Object Symbol -eq 'EWU').Name | Should -Be 'MSCI UK (EWU)'
+            ($etfs | Where-Object Symbol -eq 'EWG').Name | Should -Be 'MSCI Germany (EWG)'
+            ($etfs | Where-Object Symbol -eq 'EWJ').Name | Should -Be 'MSCI Japan (EWJ)'
+        }
     }
 
     Context 'Quote parsing' {

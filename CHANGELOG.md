@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Map style, projection and overlay choices were never restored at start-up and were dropped whenever preferences were saved. They are now saved when changed and restored on launch (`MapStyle`, `MapProjection`, `MapOverlays`)
 - Countdowns are now measured in UTC, so they stay correct on DST transition days
 - `Get-StockExchangeData` now appends built-in exchanges missing from a cache younger than 30 days, so new exchanges appear for existing installs
+- Indices tab ETF proxy labels: EWU, EWG and EWJ track the MSCI United Kingdom, Germany and Japan indices, but were labelled FTSE 100, DAX and Nikkei 225. They are now labelled `MSCI UK (EWU)`, `MSCI Germany (EWG)` and `MSCI Japan (EWJ)`
 
 ### Changed
 
