@@ -167,7 +167,7 @@ Existing installs: `Get-StockExchangeData` appends any built-in exchange missing
 |------|--------|-------------|
 | Exchange hours | Wikipedia scrape / hardcoded fallback | N/A |
 | Financial news | BBC Business, CNBC Markets, and U.S. EIA RSS feeds configured in `market-news-feeds.json` | Varies by provider |
-| Forex rates | [Frankfurter API](https://www.frankfurter.app/) / ECB XML | Unlimited |
+| Forex rates | [Frankfurter API](https://www.frankfurter.app/) / ECB XML (ECB reference rates; includes DKK and SEK; AED is not published by the ECB, so it is not shown) | Unlimited |
 | Cryptocurrency | [CoinGecko API](https://www.coingecko.com/) | Unlimited |
 | Indices & Commodities | [Twelve Data API](https://twelvedata.com/) (OMXC25: symbol `OMXC25`, Pro plan) | 800 req/day |
 | Stock quotes | [Alpha Vantage API](https://www.alphavantage.co/) | 25 req/day |
