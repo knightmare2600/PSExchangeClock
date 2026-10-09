@@ -23,7 +23,7 @@ A real-time WPF dashboard for monitoring global stock exchange closing times, li
   - Breaking financial news from the configurable `market-news-feeds.json` catalog (BBC Business, CNBC Markets, and EIA), with source/category filters, manual refresh, and live/degraded/cached status
   - Live forex rates (Frankfurter API / ECB XML fallback)
   - Cryptocurrency prices (CoinGecko API — top 10 coins)
-  - Stock indices (S&P 500, NASDAQ Composite, DAX, FTSE 100, Nikkei 225 via ETF proxies)
+  - Stock indices (S&P 500, NASDAQ Composite, DAX, FTSE 100, Nikkei 225 via ETF proxies, plus the OMX Copenhagen 25 index — see [OMXC25](#omxc25-omx-copenhagen-25))
   - Commodity prices (Gold, Silver, Oil, Natural Gas, Wheat, Platinum)
   - Individual stock quotes with company profiles and statistics
 - **Desktop notifications** at configurable thresholds (30, 15, 5 min) before exchange close
@@ -97,6 +97,7 @@ User preferences are stored in `%APPDATA%\PSExchangeClock\user-preferences.json`
 | `MapOverlays` | Overlays switched on: `DayNight`, `TimeZoneBands`, `PoliticalBorders`, `TimeZoneBoundaries`, `Earthquakes`, `Volcanoes`, `NaturalEvents`, `ConflictZones`, `SubmarineCables`, `PowerPlants`. An empty list means all off; unknown names are ignored | `["DayNight"]` |
 | `CommodityBaseCurrency` | Currency for commodity price display | `EUR` |
 | `SecretsBackend` | Where API keys are stored | `CredentialManager` |
+| `EnabledIndices` | Optional indices to fetch that are off by default (currently only `OMXC25`, which needs a Twelve Data Pro plan) | not set (off) |
 
 ### Holiday Overrides
 
@@ -168,7 +169,7 @@ Existing installs: `Get-StockExchangeData` appends any built-in exchange missing
 | Financial news | BBC Business, CNBC Markets, and U.S. EIA RSS feeds configured in `market-news-feeds.json` | Varies by provider |
 | Forex rates | [Frankfurter API](https://www.frankfurter.app/) / ECB XML | Unlimited |
 | Cryptocurrency | [CoinGecko API](https://www.coingecko.com/) | Unlimited |
-| Indices & Commodities | [Twelve Data API](https://twelvedata.com/) | 800 req/day |
+| Indices & Commodities | [Twelve Data API](https://twelvedata.com/) (OMXC25: symbol `OMXC25`, Pro plan) | 800 req/day |
 | Stock quotes | [Alpha Vantage API](https://www.alphavantage.co/) | 25 req/day |
 | World map image | [NASA GSFC Earth at Night](https://earthobservatory.nasa.gov/) | One-time download |
 | Earthquakes | [USGS Earthquake Hazards](https://earthquake.usgs.gov/) | Unlimited |
@@ -177,6 +178,49 @@ Existing installs: `Get-StockExchangeData` appends any built-in exchange missing
 | Conflict zones | [UCDP/PRIO](https://ucdp.uu.se/) | Bundled data |
 | Power plants | [WRI Global Power Plant Database](https://datasets.wri.org/datasets/global-power-plant-database) | Bundled data |
 | Submarine cables | [TeleGeography](https://www.submarinecablemap.com/) | Bundled data |
+
+## OMXC25 (OMX Copenhagen 25)
+
+[OMX Copenhagen 25](https://indexes.nasdaqomx.com/Index/Overview/OMXC25) is Nasdaq's market-value-weighted, free-float-adjusted and capped index of the 25 largest and most-traded shares on Nasdaq Copenhagen, quoted in DKK ([methodology](https://indexes.nasdaqomx.com/docs/Methodology_OMXC25.pdf)).
+
+| Property | Value |
+|----------|-------|
+| Provider | Twelve Data `/quote` (the existing Indices provider) |
+| Symbol | `OMXC25` — listed in Twelve Data's `/indices` catalogue as "OMX Copenhagen 25 Index", DKK |
+| Plan required | **Pro** or higher (Twelve Data catalogue `access.plan = "Pro"`). The free Basic key returns HTTP 403 |
+| Default | **Turned off.** The Indices tab shows the row greyed out with a note saying why, and no request is made |
+| Home exchange | Nasdaq Copenhagen (`XCSE`), Denmark |
+| Refresh | Every 15 minutes, like the other indices |
+
+### Enabling OMXC25
+
+If your Twelve Data key is on a Pro plan or higher, add `EnabledIndices` to `%APPDATA%\PSExchangeClock\user-preferences.json` and restart the dashboard:
+
+```json
+"EnabledIndices": ["OMXC25"]
+```
+
+There is no Settings control for this yet. The dashboard keeps the value when it saves your preferences. Remove the entry to turn it off again.
+
+Unlike the other Indices rows (US-listed ETF proxies), OMXC25 is a true index value and is fetched in its own request, so a plan restriction never affects the ETF rows. Each OMXC25 row shows a status line:
+
+| Status | Meaning |
+|--------|---------|
+| Intraday (may be delayed) | Nasdaq Copenhagen is in session and the quote is no older than 30 minutes. Twelve Data does not say whether a quote is real-time or delayed, so values are never labelled "live" |
+| Last close | Copenhagen is closed (pre-open, after 17:00, weekend or `holidays.json` closure) and the quote is from the last 7 days |
+| Stale | In session but the quote is more than 30 minutes old, or closed with a quote older than 7 days. The value is greyed out |
+| Unavailable | No quote has been received this session |
+
+The quote time is shown in Copenhagen time. Session status comes from the dashboard's own Nasdaq Copenhagen hours and holidays, not from the provider's `is_market_open` flag, because Twelve Data files OMXC25 under the Stockholm MIC (`XSTO`), whose hours and holidays differ.
+
+### Troubleshooting missing or stale OMXC25 quotes
+
+- **"Turned off: needs a Twelve Data Pro plan…"** — the default. See [Enabling OMXC25](#enabling-omxc25).
+- **"Requires a Twelve Data Pro plan or higher (HTTP 403)"** — your key's plan does not include this index. After a 403 the dashboard stops requesting OMXC25 for that key for the rest of the session, so it does not spend credits. Upgrade the plan, or ignore the row. Entering a different key in Settings retries it.
+- **"Last refresh failed (429) — retrying in 15 min"** — rate limit (8 credits/min on the free tier). The last good value, if any, is still shown with its own status.
+- **"Last refresh failed — retrying in 15 min"** with no code — network or timeout. Check connectivity to `api.twelvedata.com`.
+- **Stale while the market is open** — the provider has not updated the index for over 30 minutes. Compare with [Nasdaq's OMXC25 page](https://indexes.nasdaqomx.com/Index/Overview/OMXC25).
+- **No Indices tab at all** — no Twelve Data key is set; add one in **Settings**.
 
 ## Refreshing Exchange Data
 

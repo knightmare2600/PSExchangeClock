@@ -9,6 +9,7 @@ BeforeAll {
     $script:dataDir = Join-Path $script:moduleRoot 'Data'
 
     . (Join-Path $script:moduleRoot 'Private/Get-ExchangeSessionStatus.ps1')
+    . (Join-Path $script:moduleRoot 'Private/IndexQuotes.ps1')
     Import-Module (Join-Path $script:moduleRoot 'PSExchangeClock.psd1') -Force
 
     # Load holidays exactly as the dashboard does
@@ -346,5 +347,236 @@ Describe 'Get-StockExchangeData cache handling' {
         $result = @(Get-StockExchangeData -OutputPath $path -WarningAction SilentlyContinue)
         $result.Code | Should -Contain 'XCSE'
         Test-Path $path | Should -BeTrue
+    }
+}
+
+Describe 'OMXC25 index' {
+    BeforeAll {
+        $script:defs = @(Get-IndexDefinition)
+        $script:omx = $script:defs | Where-Object { $_.Symbol -eq 'OMXC25' }
+
+        # Sample Twelve Data /quote payload (shape from the Twelve Data API documentation)
+        $script:samplePayload = [PSCustomObject]@{
+            symbol         = 'OMXC25'
+            name           = 'OMX Copenhagen 25 Index'
+            currency       = 'DKK'
+            datetime       = '2026-10-08'
+            timestamp      = 1791442800      # 2026-10-08T07:00:00Z, opening bar
+            last_quote_at  = 1791453600      # 2026-10-08T10:00:00Z
+            close          = '1824.92'
+            previous_close = '1800.03'
+            is_market_open = $true
+        }
+    }
+
+    Context 'Registration' {
+        It 'is registered as a true index on Nasdaq Copenhagen, Denmark, in DKK' {
+            $script:omx | Should -Not -BeNullOrEmpty
+            $script:omx.Name | Should -Be 'OMX Copenhagen 25 (OMXC25)'
+            $script:omx.Kind | Should -Be 'Index'
+            $script:omx.Provider | Should -Be 'TwelveData'
+            $script:omx.ExchangeCode | Should -Be 'XCSE'
+            $script:omx.Country | Should -Be 'Denmark'
+            $script:omx.Currency | Should -Be 'DKK'
+        }
+
+        It 'resolves its exchange code to Nasdaq Copenhagen' {
+            $ex = $script:allExchanges | Where-Object { $_.Code -eq $script:omx.ExchangeCode }
+            $ex.Name | Should -Be 'Nasdaq Copenhagen'
+            $ex.Country | Should -Be $script:omx.Country
+        }
+
+        It 'is turned off by default with a note explaining the Pro plan requirement' {
+            $script:omx.EnabledByDefault | Should -BeFalse
+            $script:omx.DisabledReason | Should -Match 'Pro plan'
+            $script:omx.DisabledReason | Should -Match 'EnabledIndices'
+            Test-IndexEnabled -Definition $script:omx -UserPreferences $null | Should -BeFalse
+        }
+
+        It 'stays off for existing preference files without EnabledIndices' {
+            $example = Get-Content (Join-Path $script:dataDir 'user-preferences.example.json') -Raw | ConvertFrom-Json
+            Test-IndexEnabled -Definition $script:omx -UserPreferences $example | Should -BeFalse
+        }
+
+        It 'is enabled when listed in EnabledIndices (after a JSON round trip)' {
+            $saved = @{ EnabledIndices = @('OMXC25') } | ConvertTo-Json -Depth 3 | ConvertFrom-Json
+            Test-IndexEnabled -Definition $script:omx -UserPreferences $saved | Should -BeTrue
+        }
+
+        It 'leaves the ETF proxies enabled regardless of EnabledIndices' {
+            $saved = @{ EnabledIndices = @('OMXC25') } | ConvertTo-Json -Depth 3 | ConvertFrom-Json
+            foreach ($etf in @($script:defs | Where-Object { $_.Kind -eq 'EtfProxy' })) {
+                Test-IndexEnabled -Definition $etf -UserPreferences $saved | Should -BeTrue
+                Test-IndexEnabled -Definition $etf -UserPreferences $null | Should -BeTrue
+            }
+        }
+
+        It 'keeps the existing ETF proxies unchanged and in order' {
+            $etfs = @($script:defs | Where-Object { $_.Kind -eq 'EtfProxy' })
+            $etfs.Symbol | Should -Be @('SPY', 'QQQ', 'DIA', 'EWU', 'EWG', 'EWJ', 'FXI', 'INDA')
+            $etfs[0].Name | Should -Be 'S&P 500 (SPY)'
+        }
+    }
+
+    Context 'Quote parsing' {
+        It 'parses a valid quote' {
+            $q = ConvertFrom-TwelveDataQuote -Response $script:samplePayload -Symbol 'OMXC25'
+            $q.IsAvailable | Should -BeTrue
+            $q.Price | Should -Be 1824.92
+            $q.Change | Should -Be 1.38
+            $q.QuoteTimeUtc | Should -Be (Get-Utc '2026-10-08T10:00:00')
+        }
+
+        It 'falls back to timestamp when last_quote_at is absent' {
+            $p = $script:samplePayload.PSObject.Copy()
+            $p.PSObject.Properties.Remove('last_quote_at')
+            (ConvertFrom-TwelveDataQuote -Response $p -Symbol 'OMXC25').QuoteTimeUtc | Should -Be (Get-Utc '2026-10-08T07:00:00')
+        }
+
+        It 'treats a quote without a price as unavailable' {
+            $p = $script:samplePayload.PSObject.Copy()
+            $p.close = $null
+            $q = ConvertFrom-TwelveDataQuote -Response $p -Symbol 'OMXC25'
+            $q.IsAvailable | Should -BeFalse
+            $q.Price | Should -BeNullOrEmpty
+        }
+
+        It 'treats an empty response as unavailable' {
+            (ConvertFrom-TwelveDataQuote -Response $null -Symbol 'OMXC25').IsAvailable | Should -BeFalse
+        }
+
+        It 'marks HTTP 403 (plan upgrade required) as a permanent error' {
+            $q = ConvertFrom-TwelveDataQuote -Response ([PSCustomObject]@{ code = 403; message = 'upgrade'; status = 'error' }) -Symbol 'OMXC25'
+            $q.IsAvailable | Should -BeFalse
+            $q.ErrorCode | Should -Be 403
+            $q.IsPermanentError | Should -BeTrue
+        }
+
+        It 'marks HTTP 429 (rate limit) as transient' {
+            $q = ConvertFrom-TwelveDataQuote -Response ([PSCustomObject]@{ code = 429; message = 'limit'; status = 'error' }) -Symbol 'OMXC25'
+            $q.IsPermanentError | Should -BeFalse
+        }
+    }
+
+    Context 'Retrieval through Twelve Data (mocked)' {
+        It 'requests symbol OMXC25 from the /quote endpoint and parses the result' {
+            Mock Invoke-RestMethod { $script:samplePayload }
+            $q = Get-TwelveDataIndexQuote -Symbol 'OMXC25' -ApiKey 'test-key'
+            $q.IsAvailable | Should -BeTrue
+            $q.Price | Should -Be 1824.92
+            Should -Invoke Invoke-RestMethod -Times 1 -Exactly -Scope It -ParameterFilter {
+                $Uri -like 'https://api.twelvedata.com/quote?symbol=OMXC25&apikey=test-key'
+            }
+        }
+
+        It 'returns an unavailable quote instead of throwing on a network failure' {
+            Mock Invoke-RestMethod { throw [System.Net.Http.HttpRequestException]::new('No such host is known') }
+            $q = Get-TwelveDataIndexQuote -Symbol 'OMXC25' -ApiKey 'test-key' -ErrorAction Stop
+            $q.IsAvailable | Should -BeFalse
+            $q.IsPermanentError | Should -BeFalse
+            $q.ErrorMessage | Should -Match 'No such host'
+        }
+    }
+
+    Context 'Cache, fallback and back-off' {
+        It 'keeps the last good quote when a later refresh fails' {
+            $cache = @{}
+            Mock Get-TwelveDataIndexQuote { ConvertFrom-TwelveDataQuote -Response $script:samplePayload -Symbol 'OMXC25' }
+            $e = Get-CachedIndexQuote -Definition $script:omx -ApiKey 'k' -Cache $cache -NowUtc (Get-Utc '2026-10-08T10:00:00')
+            $e.LastGood.Price | Should -Be 1824.92
+
+            Mock Get-TwelveDataIndexQuote { [PSCustomObject]@{ IsAvailable = $false; ErrorCode = $null; ErrorMessage = 'timeout'; IsPermanentError = $false } }
+            $e = Get-CachedIndexQuote -Definition $script:omx -ApiKey 'k' -Cache $cache -NowUtc (Get-Utc '2026-10-08T10:20:00')
+            $e.LastGood.Price | Should -Be 1824.92
+            $e.LastError | Should -Be 'timeout'
+            $e.Blocked | Should -BeFalse
+        }
+
+        It 'does not call the provider again within the 15-minute TTL' {
+            $cache = @{}
+            Mock Get-TwelveDataIndexQuote { ConvertFrom-TwelveDataQuote -Response $script:samplePayload -Symbol 'OMXC25' }
+            Get-CachedIndexQuote -Definition $script:omx -ApiKey 'k' -Cache $cache -NowUtc (Get-Utc '2026-10-08T10:00:00') | Out-Null
+            Get-CachedIndexQuote -Definition $script:omx -ApiKey 'k' -Cache $cache -NowUtc (Get-Utc '2026-10-08T10:10:00') | Out-Null
+            Should -Invoke Get-TwelveDataIndexQuote -Times 1 -Exactly -Scope It
+            Get-CachedIndexQuote -Definition $script:omx -ApiKey 'k' -Cache $cache -NowUtc (Get-Utc '2026-10-08T10:16:00') | Out-Null
+            Should -Invoke Get-TwelveDataIndexQuote -Times 2 -Exactly -Scope It
+        }
+
+        It 'stops requesting after HTTP 403 for that key, but retries with a different key' {
+            $cache = @{}
+            Mock Get-TwelveDataIndexQuote { ConvertFrom-TwelveDataQuote -Response ([PSCustomObject]@{ code = 403; message = 'Pro plan'; status = 'error' }) -Symbol 'OMXC25' }
+            $e = Get-CachedIndexQuote -Definition $script:omx -ApiKey 'basic' -Cache $cache -NowUtc (Get-Utc '2026-10-08T10:00:00')
+            $e.Blocked | Should -BeTrue
+            $e.ErrorCode | Should -Be 403
+            Get-CachedIndexQuote -Definition $script:omx -ApiKey 'basic' -Cache $cache -NowUtc (Get-Utc '2026-10-08T12:00:00') | Out-Null
+            Should -Invoke Get-TwelveDataIndexQuote -Times 1 -Exactly -Scope It
+            Get-CachedIndexQuote -Definition $script:omx -ApiKey 'pro' -Cache $cache -NowUtc (Get-Utc '2026-10-08T12:00:00') | Out-Null
+            Should -Invoke Get-TwelveDataIndexQuote -Times 2 -Exactly -Scope It
+        }
+
+        It 'retries after the TTL following a rate-limit error' {
+            $cache = @{}
+            Mock Get-TwelveDataIndexQuote { ConvertFrom-TwelveDataQuote -Response ([PSCustomObject]@{ code = 429; message = 'limit'; status = 'error' }) -Symbol 'OMXC25' }
+            $e = Get-CachedIndexQuote -Definition $script:omx -ApiKey 'k' -Cache $cache -NowUtc (Get-Utc '2026-10-08T10:00:00')
+            $e.Blocked | Should -BeFalse
+            $e.LastGood | Should -BeNullOrEmpty
+            Get-CachedIndexQuote -Definition $script:omx -ApiKey 'k' -Cache $cache -NowUtc (Get-Utc '2026-10-08T10:15:00') | Out-Null
+            Should -Invoke Get-TwelveDataIndexQuote -Times 2 -Exactly -Scope It
+        }
+    }
+
+    Context 'Quote status (live/delayed/stale/last close) against Copenhagen hours' {
+        BeforeAll {
+            function Get-OmxStatus([string]$NowIso, $QuoteIso) {
+                $now = Get-Utc $NowIso
+                $market = (Get-ExchangeSessionStatus -Exchange $script:xcse -UtcNow $now -Holidays $script:holidays).Status
+                $qt = if ($QuoteIso) { Get-Utc $QuoteIso } else { $null }
+                Get-IndexQuoteStatus -QuoteTimeUtc $qt -MarketStatus $market -NowUtc $now
+            }
+        }
+
+        It 'is Intraday (never "live") for a fresh quote during the session' {
+            $s = Get-OmxStatus '2026-10-08T10:10:00' '2026-10-08T10:00:00'
+            $s.Status | Should -Be 'Intraday'
+            $s.Label | Should -Not -Match 'live'
+        }
+
+        It 'is Intraday during the closing auction with a recent quote' {
+            (Get-OmxStatus '2026-10-08T14:57:00' '2026-10-08T14:54:00').Status | Should -Be 'Intraday'
+        }
+
+        It 'is Stale for a delayed quote more than 30 minutes old during the session' {
+            (Get-OmxStatus '2026-10-08T10:45:00' '2026-10-08T10:00:00').Status | Should -Be 'Stale'
+        }
+
+        It 'is Stale during the session when only yesterday''s close is available' {
+            (Get-OmxStatus '2026-10-08T10:00:00' '2026-10-07T14:59:00').Status | Should -Be 'Stale'
+        }
+
+        It 'is LastClose after 17:00' {
+            (Get-OmxStatus '2026-10-08T18:00:00' '2026-10-08T14:59:00').Status | Should -Be 'LastClose'
+        }
+
+        It 'is LastClose before the open' {
+            (Get-OmxStatus '2026-10-09T06:00:00' '2026-10-08T14:59:00').Status | Should -Be 'LastClose'
+        }
+
+        It 'is LastClose across the Easter closure' {
+            # Last 2026 session before Easter: Wed 1 Apr; Tue 7 Apr pre-open
+            (Get-OmxStatus '2026-04-07T06:30:00' '2026-04-01T14:59:00').Status | Should -Be 'LastClose'
+        }
+
+        It 'is LastClose on a Copenhagen holiday even though Stockholm trades' {
+            # 2026-05-15: Copenhagen closed (day after Ascension); Twelve Data files OMXC25 under XSTO
+            (Get-OmxStatus '2026-05-15T10:00:00' '2026-05-13T14:59:00').Status | Should -Be 'LastClose'
+        }
+
+        It 'is Stale for a quote over seven days old while closed' {
+            (Get-OmxStatus '2026-10-10T10:00:00' '2026-09-30T14:59:00').Status | Should -Be 'Stale'
+        }
+
+        It 'is Unavailable with no quote' {
+            (Get-OmxStatus '2026-10-08T10:00:00' $null).Status | Should -Be 'Unavailable'
+        }
     }
 }
