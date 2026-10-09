@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tests for Nasdaq Copenhagen session status, auctions, holidays, DST transitions, selection and exchange-data caching
 - Tests for OMXC25 registration, opt-in, quote parsing, caching/back-off and quote status
 - Danish krone (DKK) and Swedish krona (SEK) on the FX tab. The UAE dirham (AED) was considered but is not published by the ECB reference rates the FX tab uses (Frankfurter v1 and the ECB XML fallback)
+- København world clock (`Romance Standard Time`) alongside the six existing base clocks. Clocks are de-duplicated by timezone ID, so the dynamic Paris and Copenhagen clocks no longer appear separately when those exchanges are active (they showed the same time)
 
 ### Fixed
 
