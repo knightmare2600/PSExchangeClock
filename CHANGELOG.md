@@ -7,10 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Pester tests under `Tests/` (run with `Invoke-Pester ./Tests`), starting with map preference restore
+
 ### Fixed
 
 - Countdowns rounded hours instead of truncating them (e.g. 7h36m displayed as `08:36:00`)
 - The **Refresh** button did nothing: it called an undefined `$scraperPath` left over from before the module restructure. It now calls `Get-StockExchangeData -ForceRefresh`
+- Map style, projection and overlay choices were never restored at start-up and were dropped whenever preferences were saved. They are now saved when changed and restored on launch (`MapStyle`, `MapProjection`, `MapOverlays`)
+
+### Changed
+
+- `PSExchangeClock.psm1` also loads non-exported helpers from `Private/`
 
 ## [1.1.0] - 2026-09-28
 
