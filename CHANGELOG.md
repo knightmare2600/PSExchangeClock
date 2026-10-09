@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Countdowns rounded hours instead of truncating them (e.g. 7h36m displayed as `08:36:00`)
+- The **Refresh** button did nothing: it called an undefined `$scraperPath` left over from before the module restructure. It now calls `Get-StockExchangeData -ForceRefresh`
 
 ## [1.1.0] - 2026-09-28
 
