@@ -580,3 +580,66 @@ Describe 'OMXC25 index' {
         }
     }
 }
+
+Describe 'FTSE 100 index' {
+    BeforeAll {
+        $script:ftse = Get-IndexDefinition | Where-Object { $_.Symbol -eq 'FTSE' }
+        $script:xlon = $script:allExchanges | Where-Object { $_.Code -eq 'XLON' }
+    }
+
+    It 'is registered as a true index on the London Stock Exchange, in GBP' {
+        $script:ftse | Should -Not -BeNullOrEmpty
+        $script:ftse.Name | Should -Be 'FTSE 100'
+        $script:ftse.Kind | Should -Be 'Index'
+        $script:ftse.ExchangeCode | Should -Be 'XLON'
+        $script:ftse.Country | Should -Be 'United Kingdom'
+        $script:ftse.Currency | Should -Be 'GBP'
+        $script:xlon.Name | Should -Be 'London Stock Exchange'
+    }
+
+    It 'is pinned to the XLON MIC because the bare ticker FTSE is ambiguous' {
+        $script:ftse.MicCode | Should -Be 'XLON'
+    }
+
+    It 'is turned off by default with a note explaining the Grow plan requirement' {
+        $script:ftse.RequiredPlan | Should -Be 'Grow'
+        $script:ftse.EnabledByDefault | Should -BeFalse
+        $script:ftse.DisabledReason | Should -Match 'Grow plan'
+        $script:ftse.DisabledReason | Should -Match '"FTSE"'
+        Test-IndexEnabled -Definition $script:ftse -UserPreferences $null | Should -BeFalse
+    }
+
+    It 'is enabled independently of OMXC25' {
+        $omx = Get-IndexDefinition | Where-Object { $_.Symbol -eq 'OMXC25' }
+        $saved = @{ EnabledIndices = @('FTSE') } | ConvertTo-Json -Depth 3 | ConvertFrom-Json
+        Test-IndexEnabled -Definition $script:ftse -UserPreferences $saved | Should -BeTrue
+        Test-IndexEnabled -Definition $omx -UserPreferences $saved | Should -BeFalse
+    }
+
+    It 'sends mic_code=XLON with the quote request' {
+        Mock Invoke-RestMethod { [PSCustomObject]@{ symbol = 'FTSE'; close = '9120.50'; previous_close = '9100.00'; last_quote_at = 1791453600 } }
+        $q = Get-TwelveDataIndexQuote -Symbol 'FTSE' -ApiKey 'test-key' -MicCode 'XLON'
+        $q.IsAvailable | Should -BeTrue
+        $q.Price | Should -Be 9120.5
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly -Scope It -ParameterFilter {
+            $Uri -eq 'https://api.twelvedata.com/quote?symbol=FTSE&apikey=test-key&mic_code=XLON'
+        }
+    }
+
+    It 'passes the MIC through the cache layer' {
+        Mock Get-TwelveDataIndexQuote { [PSCustomObject]@{ IsAvailable = $false; ErrorCode = 403; ErrorMessage = 'Grow'; IsPermanentError = $true } }
+        $e = Get-CachedIndexQuote -Definition $script:ftse -ApiKey 'basic' -Cache @{} -NowUtc (Get-Utc '2026-10-08T10:00:00')
+        $e.Blocked | Should -BeTrue
+        Should -Invoke Get-TwelveDataIndexQuote -Times 1 -Exactly -Scope It -ParameterFilter { $Symbol -eq 'FTSE' -and $MicCode -eq 'XLON' }
+    }
+
+    It 'judges quote status against London hours' {
+        # 2026-10-08 is a Thursday; London is on BST (UTC+1); LSE closes 16:30 local = 15:30 UTC
+        $open = (Get-ExchangeSessionStatus -Exchange $script:xlon -UtcNow (Get-Utc '2026-10-08T15:00:00')).Status
+        Get-IndexQuoteStatus -QuoteTimeUtc (Get-Utc '2026-10-08T14:55:00') -MarketStatus $open -NowUtc (Get-Utc '2026-10-08T15:00:00') |
+            ForEach-Object { $_.Status } | Should -Be 'Intraday'
+        $closed = (Get-ExchangeSessionStatus -Exchange $script:xlon -UtcNow (Get-Utc '2026-10-08T15:45:00')).Status
+        $closed | Should -Be 'Closed'
+        (Get-IndexQuoteStatus -QuoteTimeUtc (Get-Utc '2026-10-08T15:29:00') -MarketStatus $closed -NowUtc (Get-Utc '2026-10-08T15:45:00')).Status | Should -Be 'LastClose'
+    }
+}

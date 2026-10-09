@@ -2044,7 +2044,7 @@ public static class CredManager {
             $marketDataContent.Children.Add($grid) | Out-Null
         }
 
-        # True indices (e.g. OMXC25) with quote status from their home exchange
+        # True indices (FTSE 100, OMXC25) with quote status from their home exchange
         foreach ($idx in $indexRows) {
             Add-MarketSeparator -Converter $Converter
             $def = $idx.Definition
@@ -2140,7 +2140,7 @@ public static class CredManager {
                 $parts += "as of $($shown.ToString('dd MMM HH:mm')) $tzLabel"
             }
             if ($entry.Blocked -and $entry.ErrorCode -eq 403) {
-                $parts += 'Requires a Twelve Data Pro plan or higher (HTTP 403)'
+                $parts += "Requires a Twelve Data $($def.RequiredPlan) plan or higher (HTTP 403)"
             }
             elseif ($entry.Blocked) {
                 $parts += "Not available from provider ($($entry.ErrorCode)): $($entry.LastError)"
@@ -2159,7 +2159,7 @@ public static class CredManager {
 
         Add-MarketSeparator -Converter $Converter
         $footer = New-Object System.Windows.Controls.TextBlock
-        $footer.Text = "Source: Twelve Data (ETF proxies; OMXC25 index) | Updated: $(Format-RelativeTime -Time $script:indicesCache.LastFetch)"
+        $footer.Text = "Source: Twelve Data (ETF proxies; FTSE 100 and OMXC25 indices) | Updated: $(Format-RelativeTime -Time $script:indicesCache.LastFetch)"
         $footer.FontSize = 9; $footer.Foreground = $Converter.ConvertFromString('#555555')
         $footer.TextWrapping = 'Wrap'
         $marketDataContent.Children.Add($footer) | Out-Null

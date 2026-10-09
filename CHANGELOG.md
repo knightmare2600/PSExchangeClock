@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tests for OMXC25 registration, opt-in, quote parsing, caching/back-off and quote status
 - Danish krone (DKK) and Swedish krona (SEK) on the FX tab. The UAE dirham (AED) was considered but is not published by the ECB reference rates the FX tab uses (Frankfurter v1 and the ECB XML fallback)
 - København world clock (`Romance Standard Time`) alongside the six existing base clocks. Clocks are de-duplicated by timezone ID, so the dynamic Paris and Copenhagen clocks no longer appear separately when those exchanges are active (they showed the same time)
+- **FTSE 100** as an opt-in true index on the Indices tab (Twelve Data symbol `FTSE`, pinned to `mic_code=XLON` because the bare ticker is also a Euronext Paris ETF; needs a Grow plan, so off by default). Enable with `EnabledIndices: ["FTSE"]`
 
 ### Fixed
 

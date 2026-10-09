@@ -38,10 +38,10 @@ LONG DESCRIPTION
         - Live forex rates (Frankfurter API / ECB XML fallback)
         - Cryptocurrency prices (CoinGecko API, top 10 coins)
         - Stock indices (S&P 500, NASDAQ, DAX, FTSE, Nikkei via ETF proxies;
-          OMX Copenhagen 25 as a true index, which needs a Twelve Data Pro
-          plan and is turned off by default; enable it by adding
-          "EnabledIndices": ["OMXC25"] to user-preferences.json. Shown with
-          Intraday / Last close / Stale / Unavailable status)
+          FTSE 100 and OMX Copenhagen 25 as true indices, which need a
+          Twelve Data Grow / Pro plan and are turned off by default; enable
+          with "EnabledIndices": ["FTSE", "OMXC25"] in user-preferences.json.
+          Shown with Intraday / Last close / Stale / Unavailable status)
         - Commodity prices (Gold, Silver, Oil, Natural Gas, Wheat)
         - Individual stock quotes with company profiles and statistics
 

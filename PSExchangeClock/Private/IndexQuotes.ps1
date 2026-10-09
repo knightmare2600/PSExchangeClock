@@ -8,11 +8,18 @@ function Get-IndexDefinition {
         symbols fetched individually, so a plan restriction on one index cannot
         affect the ETF batch.
 
+        True indices need a paid Twelve Data plan (RequiredPlan), so they are off
+        by default (EnabledByDefault = $false) and are only requested when the
+        user lists their symbol in EnabledIndices in user-preferences.json.
+
+        FTSE 100: Twelve Data lists symbol 'FTSE' ("FTSE 100", GBP, mic_code XLON)
+        in its /indices catalogue with access level 'Grow'. The bare ticker
+        'FTSE' is also an Amundi MSCI UK ETF on Euronext Paris, so the request
+        is pinned with MicCode XLON.
+
         OMXC25: Twelve Data lists symbol 'OMXC25' ("OMX Copenhagen 25 Index", DKK)
         in its /indices catalogue with access level 'Pro' - a Basic key receives
-        HTTP 403 (upgrade required). It is therefore off by default
-        (EnabledByDefault = $false) and is only requested when the user lists it
-        in EnabledIndices in user-preferences.json.
+        HTTP 403 (upgrade required).
     #>
     [CmdletBinding()]
     [OutputType([PSCustomObject[]])]
@@ -38,9 +45,25 @@ function Get-IndexDefinition {
             ExchangeCode = $null
             Country      = $null
             Currency     = 'USD'
+            MicCode      = $null
+            RequiredPlan = 'Basic'
             EnabledByDefault = $true
             DisabledReason   = $null
         }
+    }
+
+    [PSCustomObject]@{
+        Symbol       = 'FTSE'
+        Name         = 'FTSE 100'
+        Kind         = 'Index'
+        Provider     = 'TwelveData'
+        ExchangeCode = 'XLON'
+        Country      = 'United Kingdom'
+        Currency     = 'GBP'
+        MicCode      = 'XLON'
+        RequiredPlan = 'Grow'
+        EnabledByDefault = $false
+        DisabledReason   = 'Turned off: needs a Twelve Data Grow plan or higher (free/Basic keys get HTTP 403). To enable, add "FTSE" to "EnabledIndices" in user-preferences.json.'
     }
 
     [PSCustomObject]@{
@@ -51,6 +74,8 @@ function Get-IndexDefinition {
         ExchangeCode = 'XCSE'
         Country      = 'Denmark'
         Currency     = 'DKK'
+        MicCode      = $null
+        RequiredPlan = 'Pro'
         EnabledByDefault = $false
         DisabledReason   = 'Turned off: needs a Twelve Data Pro plan or higher (free/Basic keys get HTTP 403). To enable, add "EnabledIndices": ["OMXC25"] to user-preferences.json.'
     }
@@ -159,10 +184,15 @@ function Get-TwelveDataIndexQuote {
     param(
         [Parameter(Mandatory)][string]$Symbol,
         [Parameter(Mandatory)][string]$ApiKey,
+        [string]$MicCode,
         [int]$TimeoutSec = 15
     )
 
     $url = "https://api.twelvedata.com/quote?symbol=$([uri]::EscapeDataString($Symbol))&apikey=$([uri]::EscapeDataString($ApiKey))"
+    if ($MicCode) {
+        # Disambiguates tickers shared by several instruments (ISO 10383 MIC)
+        $url += "&mic_code=$([uri]::EscapeDataString($MicCode))"
+    }
     try {
         $response = Invoke-RestMethod -Uri $url -TimeoutSec $TimeoutSec -ErrorAction Stop
     }
@@ -239,7 +269,7 @@ function Get-CachedIndexQuote {
     if ($entry.LastAttemptUtc -and ($NowUtc - $entry.LastAttemptUtc).TotalMinutes -lt $TtlMinutes) { return $entry }
 
     $entry.LastAttemptUtc = $NowUtc
-    $quote = Get-TwelveDataIndexQuote -Symbol $Definition.Symbol -ApiKey $ApiKey
+    $quote = Get-TwelveDataIndexQuote -Symbol $Definition.Symbol -ApiKey $ApiKey -MicCode $Definition.MicCode
     if ($quote.IsAvailable) {
         $entry.LastGood = $quote
         $entry.LastFetchUtc = $NowUtc
