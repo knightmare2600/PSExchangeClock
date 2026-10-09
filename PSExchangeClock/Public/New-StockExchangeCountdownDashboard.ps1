@@ -150,6 +150,10 @@ function New-StockExchangeCountdownDashboard {
             }
         }
         catch { }
+        # No UI for EnabledIndices yet: carry the hand-edited value through each save
+        if ($script:userPrefs -and $script:userPrefs.EnabledIndices) {
+            $prefs.EnabledIndices = @($script:userPrefs.EnabledIndices)
+        }
         # API keys are stored via the secrets backend, not in JSON
         $prefs | ConvertTo-Json -Depth 3 | Set-Content -Path $prefsPath -Encoding UTF8
     }
@@ -987,6 +991,7 @@ public static class CredManager {
     $script:fxCache = @{ Data = $null; LastFetch = [datetime]::MinValue }
     $script:cryptoCache = @{ Data = $null; LastFetch = [datetime]::MinValue }
     $script:indicesCache = @{ Data = $null; LastFetch = [datetime]::MinValue }
+    $script:indexQuoteCache = @{}
     $script:commoditiesCache = @{ Data = $null; LastFetch = [datetime]::MinValue }
     $script:stockQuoteCache = @{}
 
@@ -1225,64 +1230,82 @@ public static class CredManager {
         param([string]$ApiKey)
         if ([string]::IsNullOrWhiteSpace($ApiKey)) { return $null }
 
+        $definitions = @(Get-IndexDefinition)
+
         # Check cache (15 minute TTL)
         if ($script:indicesCache.Data -and ([datetime]::Now - $script:indicesCache.LastFetch).TotalMinutes -lt 15) {
-            return $script:indicesCache.Data
+            $result = @($script:indicesCache.Data)
         }
+        else {
+            # Free tier: index symbols (SPX, DJI etc.) require paid plans.
+            # Use index-tracking ETFs which are available on the free tier.
+            $indices = @($definitions | Where-Object { $_.Kind -eq 'EtfProxy' })
 
-        # Free tier: index symbols (SPX, DJI etc.) require paid plans.
-        # Use index-tracking ETFs which are available on the free tier.
-        $indices = @(
-            @{ Symbol = 'SPY'; Name = 'S&P 500 (SPY)' },
-            @{ Symbol = 'QQQ'; Name = 'NASDAQ 100 (QQQ)' },
-            @{ Symbol = 'DIA'; Name = 'Dow Jones (DIA)' },
-            @{ Symbol = 'EWU'; Name = 'FTSE 100 (EWU)' },
-            @{ Symbol = 'EWG'; Name = 'DAX (EWG)' },
-            @{ Symbol = 'EWJ'; Name = 'Nikkei 225 (EWJ)' },
-            @{ Symbol = 'FXI'; Name = 'China Large-Cap (FXI)' },
-            @{ Symbol = 'INDA'; Name = 'India (INDA)' }
-        )
+            # Fetch in small batches to stay within 8 credits/min free tier limit
+            $result = @()
+            $batches = @()
+            for ($i = 0; $i -lt $indices.Count; $i += 8) {
+                $batch = $indices[$i..([math]::Min($i + 7, $indices.Count - 1))]
+                $batches += , @($batch)
+            }
 
-        # Fetch in small batches to stay within 8 credits/min free tier limit
-        $result = @()
-        $batches = @()
-        for ($i = 0; $i -lt $indices.Count; $i += 8) {
-            $batch = $indices[$i..([math]::Min($i + 7, $indices.Count - 1))]
-            $batches += , @($batch)
-        }
-
-        try {
-            foreach ($batch in $batches) {
-                $symbolList = ($batch | ForEach-Object { $_.Symbol }) -join ','
-                $url = "https://api.twelvedata.com/quote?symbol=$symbolList&apikey=$ApiKey"
-                $response = Invoke-RestMethod -Uri $url -TimeoutSec 15
-                foreach ($idx in $batch) {
-                    # Single symbol returns data directly; multiple returns keyed object
-                    $data = if ($batch.Count -eq 1) { $response } else { $response.($idx.Symbol) }
-                    if ($data -and $data.close -and -not $data.code) {
-                        $change = 0
-                        if ($data.previous_close -and [double]$data.previous_close -ne 0) {
-                            $change = [math]::Round((([double]$data.close - [double]$data.previous_close) / [double]$data.previous_close) * 100, 2)
-                        }
-                        $result += [PSCustomObject]@{
-                            Symbol = $idx.Symbol
-                            Name   = $idx.Name
-                            Price  = [math]::Round([double]$data.close, 2)
-                            Change = $change
+            try {
+                foreach ($batch in $batches) {
+                    $symbolList = ($batch | ForEach-Object { $_.Symbol }) -join ','
+                    $url = "https://api.twelvedata.com/quote?symbol=$symbolList&apikey=$ApiKey"
+                    $response = Invoke-RestMethod -Uri $url -TimeoutSec 15
+                    foreach ($idx in $batch) {
+                        # Single symbol returns data directly; multiple returns keyed object
+                        $data = if ($batch.Count -eq 1) { $response } else { $response.($idx.Symbol) }
+                        if ($data -and $data.close -and -not $data.code) {
+                            $change = 0
+                            if ($data.previous_close -and [double]$data.previous_close -ne 0) {
+                                $change = [math]::Round((([double]$data.close - [double]$data.previous_close) / [double]$data.previous_close) * 100, 2)
+                            }
+                            $result += [PSCustomObject]@{
+                                Symbol = $idx.Symbol
+                                Name   = $idx.Name
+                                Price  = [math]::Round([double]$data.close, 2)
+                                Change = $change
+                            }
                         }
                     }
                 }
+                if ($result.Count -gt 0) {
+                    $script:indicesCache.Data = $result
+                    $script:indicesCache.LastFetch = [datetime]::Now
+                }
             }
-            if ($result.Count -gt 0) {
-                $script:indicesCache.Data = $result
-                $script:indicesCache.LastFetch = [datetime]::Now
+            catch {
+                Write-Verbose "Twelve Data API failed: $($_.Exception.Message)"
+                $result = @()
             }
-            return $result
         }
-        catch {
-            Write-Verbose "Twelve Data API failed: $($_.Exception.Message)"
-            return $null
+
+        # True index symbols are fetched one at a time with their own cache, so a
+        # plan restriction (e.g. OMXC25 needs Twelve Data Pro) never affects the ETFs
+        foreach ($def in @($definitions | Where-Object { $_.Kind -eq 'Index' })) {
+            if (-not (Test-IndexEnabled -Definition $def -UserPreferences $script:userPrefs)) {
+                # Turned off (e.g. needs a paid plan): shown with a note, never requested
+                $result += [PSCustomObject]@{
+                    Symbol = $def.Symbol; Name = $def.Name; Price = $null; Change = $null
+                    Definition = $def; CacheEntry = $null; Disabled = $true
+                }
+                continue
+            }
+            $entry = Get-CachedIndexQuote -Definition $def -ApiKey $ApiKey -Cache $script:indexQuoteCache
+            $result += [PSCustomObject]@{
+                Symbol     = $def.Symbol
+                Name       = $def.Name
+                Price      = if ($entry.LastGood) { $entry.LastGood.Price } else { $null }
+                Change     = if ($entry.LastGood) { $entry.LastGood.Change } else { $null }
+                Definition = $def
+                CacheEntry = $entry
+                Disabled   = $false
+            }
         }
+
+        return $result
     }
 
     function Get-CommodityPrices {
@@ -1971,17 +1994,19 @@ public static class CredManager {
             return
         }
 
-        $indices = Get-StockIndices -ApiKey $apiKey
-        if (-not $indices -or $indices.Count -eq 0) {
+        $indices = @(Get-StockIndices -ApiKey $apiKey)
+        $etfRows = @($indices | Where-Object { -not $_.Definition })
+        $indexRows = @($indices | Where-Object { $_.Definition })
+        if ($etfRows.Count -eq 0) {
             $lbl = New-Object System.Windows.Controls.TextBlock
             $lbl.Text = 'Index data unavailable — may be rate-limited (8 req/min free tier). Try again in a minute.'
             $lbl.Foreground = $Converter.ConvertFromString('#888888'); $lbl.FontSize = 11; $lbl.TextWrapping = 'Wrap'
             $lbl.Margin = [System.Windows.Thickness]::new(0, 10, 0, 0)
             $marketDataContent.Children.Add($lbl) | Out-Null
-            return
+            if ($indexRows.Count -eq 0) { return }
         }
 
-        foreach ($idx in $indices) {
+        foreach ($idx in $etfRows) {
             $changeColor = if ($idx.Change -ge 0) { '#00CC66' } else { '#FF4444' }
             $arrow = if ($idx.Change -ge 0) { [char]0x25B2 } else { [char]0x25BC }
 
@@ -2017,9 +2042,122 @@ public static class CredManager {
             $marketDataContent.Children.Add($grid) | Out-Null
         }
 
+        # True indices (e.g. OMXC25) with quote status from their home exchange
+        foreach ($idx in $indexRows) {
+            Add-MarketSeparator -Converter $Converter
+            $def = $idx.Definition
+            if ($idx.Disabled) {
+                $lblName = New-Object System.Windows.Controls.TextBlock
+                $lblName.Text = "$($idx.Name) — $($def.Country)"; $lblName.FontSize = 11
+                $lblName.Foreground = $Converter.ConvertFromString('#777777')
+                $marketDataContent.Children.Add($lblName) | Out-Null
+                $lblNote = New-Object System.Windows.Controls.TextBlock
+                $lblNote.Text = $def.DisabledReason
+                $lblNote.FontSize = 9; $lblNote.TextWrapping = 'Wrap'
+                $lblNote.Foreground = $Converter.ConvertFromString('#888888')
+                $lblNote.Margin = [System.Windows.Thickness]::new(0, 0, 0, 4)
+                $marketDataContent.Children.Add($lblNote) | Out-Null
+                continue
+            }
+            $entry = $idx.CacheEntry
+            $exRow = $script:exchangeRows | Where-Object { $_.Code -eq $def.ExchangeCode } | Select-Object -First 1
+            $marketStatus = 'Closed'
+            $exName = $def.ExchangeCode
+            $exTz = $null
+            if ($exRow) {
+                $exName = $exRow.DisplayName
+                $exTz = $exRow.TimeZoneId
+                $exObj = [PSCustomObject]@{
+                    TimeZoneId = $exRow.TimeZoneId; OpenTimeLocal = $exRow.OpenTime; CloseTimeLocal = $exRow.CloseTime
+                    LunchBreakStart = $exRow.LunchBreakStart; LunchBreakEnd = $exRow.LunchBreakEnd; Code = $exRow.Code
+                    OpeningAuctionStart = $exRow.OpeningAuctionStart
+                    ClosingAuctionStart = $exRow.ClosingAuctionStart
+                }
+                $marketStatus = (Get-ExchangeStatus -Exchange $exObj).Status
+            }
+            $quoteTime = if ($entry.LastGood) { $entry.LastGood.QuoteTimeUtc } else { $null }
+            $hasQuote = [bool]$entry.LastGood
+            $qs = if ($hasQuote -and -not $quoteTime) {
+                # Price without a provider timestamp: age cannot be judged, so never show it as current
+                @{ Status = 'Stale'; Label = 'Quote time unknown' }
+            }
+            else {
+                Get-IndexQuoteStatus -QuoteTimeUtc $quoteTime -MarketStatus $marketStatus
+            }
+
+            $grid = New-Object System.Windows.Controls.Grid
+            $c1 = New-Object System.Windows.Controls.ColumnDefinition; $c1.Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star)
+            $c2 = New-Object System.Windows.Controls.ColumnDefinition; $c2.Width = [System.Windows.GridLength]::new(0, [System.Windows.GridUnitType]::Auto)
+            $c3 = New-Object System.Windows.Controls.ColumnDefinition; $c3.Width = [System.Windows.GridLength]::new(0, [System.Windows.GridUnitType]::Auto)
+            $grid.ColumnDefinitions.Add($c1); $grid.ColumnDefinitions.Add($c2); $grid.ColumnDefinitions.Add($c3)
+            $grid.Margin = [System.Windows.Thickness]::new(0, 0, 0, 2)
+
+            $lblName = New-Object System.Windows.Controls.TextBlock
+            $lblName.Text = $idx.Name; $lblName.FontSize = 11
+            $lblName.Foreground = $Converter.ConvertFromString('#E0E0E0'); $lblName.VerticalAlignment = 'Center'
+            [System.Windows.Controls.Grid]::SetColumn($lblName, 0)
+            $grid.Children.Add($lblName) | Out-Null
+
+            # Stale and unavailable values are greyed out so they are not mistaken for current data
+            $priceColor = if ($qs.Status -in @('Intraday', 'LastClose')) { '#E0E0E0' } else { '#777777' }
+            $lblPrice = New-Object System.Windows.Controls.TextBlock
+            $lblPrice.Text = if ($hasQuote) { "$($def.Currency) $($idx.Price.ToString('N2'))" } else { [string][char]0x2014 }
+            $lblPrice.FontSize = 11
+            $lblPrice.Foreground = $Converter.ConvertFromString($priceColor)
+            $lblPrice.FontFamily = [System.Windows.Media.FontFamily]::new('Consolas'); $lblPrice.HorizontalAlignment = 'Right'
+            $lblPrice.VerticalAlignment = 'Center'
+            [System.Windows.Controls.Grid]::SetColumn($lblPrice, 1)
+            $grid.Children.Add($lblPrice) | Out-Null
+
+            if ($hasQuote) {
+                $changeColor = if ($qs.Status -notin @('Intraday', 'LastClose')) { '#777777' } elseif ($idx.Change -ge 0) { '#00CC66' } else { '#FF4444' }
+                $arrow = if ($idx.Change -ge 0) { [char]0x25B2 } else { [char]0x25BC }
+                $lblChange = New-Object System.Windows.Controls.TextBlock
+                $lblChange.Text = " $arrow $($idx.Change)%"; $lblChange.FontSize = 10
+                $lblChange.Foreground = $Converter.ConvertFromString($changeColor)
+                $lblChange.FontFamily = [System.Windows.Media.FontFamily]::new('Consolas')
+                $lblChange.VerticalAlignment = 'Center'; $lblChange.Margin = [System.Windows.Thickness]::new(6, 0, 0, 0)
+                [System.Windows.Controls.Grid]::SetColumn($lblChange, 2)
+                $grid.Children.Add($lblChange) | Out-Null
+            }
+            $marketDataContent.Children.Add($grid) | Out-Null
+
+            # Status line: market, quote status, quote time in exchange-local time, last error
+            $parts = @("$exName, $($def.Country)", $qs.Label)
+            if ($quoteTime) {
+                $shown = $quoteTime
+                $tzLabel = 'UTC'
+                if ($exTz) {
+                    try {
+                        $tzInfo = [System.TimeZoneInfo]::FindSystemTimeZoneById($exTz)
+                        $shown = [System.TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::SpecifyKind($quoteTime, 'Utc'), $tzInfo)
+                        $tzLabel = "$($exRow.City) time"
+                    }
+                    catch { Write-Verbose "Quote time shown in UTC; timezone $exTz unavailable: $($_.Exception.Message)" }
+                }
+                $parts += "as of $($shown.ToString('dd MMM HH:mm')) $tzLabel"
+            }
+            if ($entry.Blocked -and $entry.ErrorCode -eq 403) {
+                $parts += 'Requires a Twelve Data Pro plan or higher (HTTP 403)'
+            }
+            elseif ($entry.Blocked) {
+                $parts += "Not available from provider ($($entry.ErrorCode)): $($entry.LastError)"
+            }
+            elseif ($entry.LastError) {
+                $errCode = if ($entry.ErrorCode) { " ($($entry.ErrorCode))" } else { '' }
+                $parts += "Last refresh failed$errCode — retrying in 15 min"
+            }
+            $lblStatus = New-Object System.Windows.Controls.TextBlock
+            $lblStatus.Text = $parts -join ' · '
+            $lblStatus.FontSize = 9; $lblStatus.TextWrapping = 'Wrap'
+            $lblStatus.Foreground = $Converter.ConvertFromString('#888888')
+            $lblStatus.Margin = [System.Windows.Thickness]::new(0, 0, 0, 4)
+            $marketDataContent.Children.Add($lblStatus) | Out-Null
+        }
+
         Add-MarketSeparator -Converter $Converter
         $footer = New-Object System.Windows.Controls.TextBlock
-        $footer.Text = "Source: Twelve Data (ETF proxies) | Updated: $(Format-RelativeTime -Time $script:indicesCache.LastFetch)"
+        $footer.Text = "Source: Twelve Data (ETF proxies; OMXC25 index) | Updated: $(Format-RelativeTime -Time $script:indicesCache.LastFetch)"
         $footer.FontSize = 9; $footer.Foreground = $Converter.ConvertFromString('#555555')
         $footer.TextWrapping = 'Wrap'
         $marketDataContent.Children.Add($footer) | Out-Null
