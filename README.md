@@ -97,7 +97,7 @@ User preferences are stored in `%APPDATA%\PSExchangeClock\user-preferences.json`
 | `MapOverlays` | Overlays switched on: `DayNight`, `TimeZoneBands`, `PoliticalBorders`, `TimeZoneBoundaries`, `Earthquakes`, `Volcanoes`, `NaturalEvents`, `ConflictZones`, `SubmarineCables`, `PowerPlants`. An empty list means all off; unknown names are ignored | `["DayNight"]` |
 | `CommodityBaseCurrency` | Currency for commodity price display | `EUR` |
 | `SecretsBackend` | Where API keys are stored | `CredentialManager` |
-| `EnabledIndices` | Optional indices to fetch that are off by default (currently only `OMXC25`, which needs a Twelve Data Pro plan) | not set (off) |
+| `EnabledIndices` | Optional true indices to fetch that are off by default: `FTSE` (FTSE 100, needs a Twelve Data Grow plan) and `OMXC25` (needs Pro) | not set (off) |
 
 ### Holiday Overrides
 
@@ -169,7 +169,7 @@ Existing installs: `Get-StockExchangeData` appends any built-in exchange missing
 | Financial news | BBC Business, CNBC Markets, and U.S. EIA RSS feeds configured in `market-news-feeds.json` | Varies by provider |
 | Forex rates | [Frankfurter API](https://www.frankfurter.app/) / ECB XML | Unlimited |
 | Cryptocurrency | [CoinGecko API](https://www.coingecko.com/) | Unlimited |
-| Indices & Commodities | [Twelve Data API](https://twelvedata.com/) (OMXC25: symbol `OMXC25`, Pro plan) | 800 req/day |
+| Indices & Commodities | [Twelve Data API](https://twelvedata.com/) (FTSE 100: symbol `FTSE`, Grow plan; OMXC25: symbol `OMXC25`, Pro plan) | 800 req/day |
 | Stock quotes | [Alpha Vantage API](https://www.alphavantage.co/) | 25 req/day |
 | World map image | [NASA GSFC Earth at Night](https://earthobservatory.nasa.gov/) | One-time download |
 | Earthquakes | [USGS Earthquake Hazards](https://earthquake.usgs.gov/) | Unlimited |
@@ -178,6 +178,20 @@ Existing installs: `Get-StockExchangeData` appends any built-in exchange missing
 | Conflict zones | [UCDP/PRIO](https://ucdp.uu.se/) | Bundled data |
 | Power plants | [WRI Global Power Plant Database](https://datasets.wri.org/datasets/global-power-plant-database) | Bundled data |
 | Submarine cables | [TeleGeography](https://www.submarinecablemap.com/) | Bundled data |
+
+## FTSE 100
+
+The London Stock Exchange (`XLON`) is the exchange; the FTSE 100 is the index of its 100 largest listed companies, calculated by FTSE Russell.
+
+| Property | Value |
+|----------|-------|
+| Provider | Twelve Data `/quote` |
+| Symbol | `FTSE` with `mic_code=XLON` — listed in Twelve Data's `/indices` catalogue as "FTSE 100", GBP. The MIC is required because the bare ticker `FTSE` is also an Amundi MSCI UK ETF on Euronext Paris |
+| Plan required | **Grow** or higher (Twelve Data catalogue `access.plan = "Grow"`). The free Basic key returns HTTP 403 |
+| Default | **Turned off**, shown greyed out with a note. Enable with `"EnabledIndices": ["FTSE"]` (combine with `"OMXC25"` if wanted) |
+| Home exchange | London Stock Exchange (`XLON`), United Kingdom |
+
+It uses the same status line, caching and back-off as OMXC25 below, judged against London hours. `holidays.json` has no UK closure dates, so on a UK bank holiday an old quote shows as *Stale* rather than *Last close*.
 
 ## OMXC25 (OMX Copenhagen 25)
 

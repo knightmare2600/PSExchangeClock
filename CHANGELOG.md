@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pester tests under `Tests/` (run with `Invoke-Pester ./Tests`), starting with map preference restore
 - Tests for Nasdaq Copenhagen session status, auctions, holidays, DST transitions, selection and exchange-data caching
 - Tests for OMXC25 registration, opt-in, quote parsing, caching/back-off and quote status
+- **FTSE 100** as an opt-in true index on the Indices tab (Twelve Data symbol `FTSE`, pinned to `mic_code=XLON` because the bare ticker is also a Euronext Paris ETF; needs a Grow plan, so off by default). Enable with `EnabledIndices: ["FTSE"]`
 
 ### Fixed
 
